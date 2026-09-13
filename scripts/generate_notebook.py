@@ -64,7 +64,12 @@ print(f"Workspace Path    : {WORKSPACE_DIR}")
 print(f"Branch Target     : {BRANCH}")
 print(f"Processor Mode    : {PROCESSOR_MODE}")
 print(f"Server Port       : {PORT}")
+if sys.platform == "win32":
+    print("\n⚠️ NOTICE: You are viewing/running this notebook locally on Windows!")
+    print("   'run_colab.ipynb' is designed to run in Google Colab (Linux) with a T4 GPU.")
+    print("   Please upload this file to https://colab.research.google.com and run it there.")
 print("=" * 60)
+
 """)
 
     # Stage 1
@@ -293,10 +298,11 @@ package_tiers = [
         [
             "torchxrayvision>=1.2.3",
             "ollama>=0.1.7",
-            # bitsandbytes: Required by perception/lab/vlm_extractor.py
+            # bitsandbytes + accelerate: Required by perception/lab/vlm_extractor.py
             # for the Transformers fallback path → BitsAndBytesConfig 4-bit NF4
             # quantization of Qwen2.5-VL-3B-Instruct (when Ollama is unavailable)
-            "bitsandbytes>=0.43.0"
+            "bitsandbytes>=0.43.0",
+            "accelerate>=0.28.0"
         ]
     )
 ]
@@ -509,6 +515,7 @@ Pulls **two required models** from Ollama and runs a warm-up verification:
 """)
 
     code_cell("""# ── Stage 8: Pull & Test Selected LLM + Vision Model ──
+import time
 import subprocess
 import ollama
 
@@ -516,10 +523,22 @@ print("=" * 60)
 print(f"🧠 Stage 8 — Pulling & Testing Models")
 print("=" * 60)
 
+def pull_model_with_retry(model_name, retries=3):
+    \"\"\"Pulls Ollama model with automatic retry on transient network hitches.\"\"\"
+    for attempt in range(1, retries + 1):
+        print(f"\\nPulling model '{model_name}' (attempt {attempt}/{retries})...")
+        res = subprocess.run(["ollama", "pull", model_name])
+        if res.returncode == 0:
+            print(f"✅ Successfully downloaded '{model_name}'.")
+            return
+        if attempt < retries:
+            print(f"⚠️ Download interrupted, retrying in 5 seconds...")
+            time.sleep(5.0)
+    raise RuntimeError(f"❌ Failed to download '{model_name}' after {retries} attempts! Check network connection.")
+
 # ── 8a: Pull the main text LLM ──────────────────────────────────
-print(f"\\n[8a] Pulling text LLM: {LLM_MODEL}...")
-subprocess.run(["ollama", "pull", LLM_MODEL], check=True)
-print(f"✅ {LLM_MODEL} downloaded.")
+print(f"[8a] Pulling text LLM: {LLM_MODEL}...")
+pull_model_with_retry(LLM_MODEL)
 
 # ── 8b: Pull qwen2.5vl:3b (MANDATORY vision model) ────────────────
 # Required by:
@@ -528,8 +547,8 @@ print(f"✅ {LLM_MODEL} downloaded.")
 VISION_MODEL = "qwen2.5vl:3b"
 print(f"\\n[8b] Pulling vision model: {VISION_MODEL}...")
 print("     (Used by prescription handwriting OCR & lab report VLM pipeline)")
-subprocess.run(["ollama", "pull", VISION_MODEL], check=True)
-print(f"✅ {VISION_MODEL} downloaded.")
+pull_model_with_retry(VISION_MODEL)
+
 
 # ── 8c: Warm-up test on text LLM ──────────────────────────────────
 print(f"\\n[8c] Running warm-up clinical prompt on {LLM_MODEL}...")
@@ -625,20 +644,26 @@ frontend_dir = os.path.join(WORKSPACE_DIR, "frontend")
 if not os.path.exists(frontend_dir):
     raise FileNotFoundError(f"Frontend directory not found at {frontend_dir}")
 
-# Install and build frontend
-print("Running 'npm install'...")
-subprocess.run(["npm", "install"], cwd=frontend_dir, check=True)
+# Install and build frontend (resilient)
+try:
+    print("Running 'npm install'...")
+    subprocess.run(["npm", "install"], cwd=frontend_dir, check=True)
 
-print("Running 'npm run build'...")
-subprocess.run(["npm", "run", "build"], cwd=frontend_dir, check=True)
+    print("Running 'npm run build'...")
+    subprocess.run(["npm", "run", "build"], cwd=frontend_dir, check=True)
 
-dist_dir = os.path.join(frontend_dir, "dist")
-index_html = os.path.join(dist_dir, "index.html")
+    dist_dir = os.path.join(frontend_dir, "dist")
+    index_html = os.path.join(dist_dir, "index.html")
 
-if not (os.path.exists(dist_dir) and os.path.exists(index_html)):
-    raise RuntimeError(f"❌ Frontend build verification failed: {dist_dir} or {index_html} missing!")
+    if os.path.exists(dist_dir) and os.path.exists(index_html):
+        print(f"✅ Frontend successfully built and verified at: {dist_dir}")
+    else:
+        print("⚠️ Frontend build finished without dist/index.html.")
+except Exception as fe:
+    print(f"⚠️ Note: Colab frontend build step skipped or failed ({fe}).")
+    print("   FastAPI backend is unaffected and will run all AI perception APIs.")
+    print("   You will connect your laptop frontend locally via 'npm run dev'!")
 
-print(f"✅ Frontend successfully built and verified at: {dist_dir}")
 print("=" * 60)
 """)
 
@@ -898,7 +923,7 @@ tunnel_proc = subprocess.Popen(
 
 # Wait for tunnel URL to appear in logs
 public_url = None
-max_wait = 35
+max_wait = 60
 start_t = time.time()
 
 while time.time() - start_t < max_wait:
@@ -914,14 +939,14 @@ while time.time() - start_t < max_wait:
 if not public_url:
     with open(tunnel_log_path, "r") as tf:
         log_snippet = tf.read()
-    raise RuntimeError(f"❌ Failed to obtain Cloudflare Tunnel URL!\\nLog:\\n{log_snippet}")
+    raise RuntimeError(f"❌ Failed to obtain Cloudflare Tunnel URL within {max_wait}s!\\nLog:\\n{log_snippet}")
 
 print(f"Domain assigned: {public_url}")
 print("Waiting for Cloudflare edge routing to synchronize...")
 
 # Wait until edge connection is established (prevents Cloudflare Error 1033)
 edge_connected = False
-for _ in range(12):
+for _ in range(15):
     time.sleep(1.5)
     with open(tunnel_log_path, "r") as tf:
         log_content = tf.read()
@@ -936,7 +961,16 @@ else:
     time.sleep(4.0)
 
 print(f"\\n✅ Cloudflare Tunnel is READY and LIVE: {public_url}")
-print("=" * 60)
+print("=" * 65)
+print("📋 LOCAL LAPTOP FRONTEND CONNECTION SETUP")
+print("=" * 65)
+print("Paste this line into your laptop's 'frontend/.env' file:")
+print(f"\\n   VITE_API_BASE_URL={public_url}\\n")
+print("Then on your laptop, open terminal and run:")
+print("   cd frontend")
+print("   npm run dev")
+print(f"\\nThen open: http://localhost:5173")
+print("=" * 65)
 """)
 
     # Stage 15
@@ -971,6 +1005,7 @@ VRAM                : {g_vram}
 
 Ollama              : OK
 Selected LLM        : {LLM_MODEL}
+Vision Model        : {VISION_MODEL}
 LLM warm-up         : PASS
 
 Whisper             : OK
@@ -986,39 +1021,76 @@ Prescription pipeline: PASS
 ECG pipeline        : PASS
 X-ray pipeline      : PASS
 
-Frontend build      : PASS
-FastAPI             : PASS
-Port {PORT}          : PASS
-Cloudflare          : PASS
+FastAPI Backend     : PASS (Port {PORT})
+Cloudflare Tunnel   : PASS
 
 ============================================================
-🔗 MEDIKIOSK ACCESS URLS
+📋 STEP 1: CONFIGURE YOUR LOCAL LAPTOP FRONTEND
 ============================================================
+1. On your laptop, open: frontend/.env
+2. Paste this exact line:
+   VITE_API_BASE_URL={public_url}
 
+3. Run in your laptop terminal:
+   cd frontend
+   npm run dev
+
+4. Open: http://localhost:5173
+
+============================================================
+🔗 DIRECT CLOUD ACCESS URLS
+============================================================
 Public Web Kiosk    : {public_url}
 Doctor Dashboard    : {public_url}/doctor
 API Swagger Docs    : {public_url}/docs
+Health Endpoint     : {public_url}/api/health
 
 ============================================================
-MediKiosk is ready and awaiting patients!
+MediKiosk backend is live and ready!
 ============================================================
 \"\"\"
 
 print(report)
 
-# Render clickable HTML card in Colab
+# Render clickable HTML card in Colab with copy-paste box
 from IPython.display import display, HTML
 display(HTML(f\"\"\"
-<div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 24px; border-radius: 12px; border: 1px solid #38bdf8; font-family: sans-serif; color: #f8fafc; max-width: 650px; margin: 10px 0;">
-    <h2 style="margin: 0 0 12px 0; color: #38bdf8; font-size: 22px;">🏥 MediKiosk v2 is Online!</h2>
-    <p style="margin: 4px 0 16px 0; font-size: 14px; color: #94a3b8;">Click below to access your intake kiosk or doctor portal:</p>
-    <div style="display: flex; gap: 12px; flex-wrap: wrap;">
-        <a href="{public_url}" target="_blank" style="background: #0284c7; color: white; padding: 10px 18px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">Open MediKiosk</a>
-        <a href="{public_url}/doctor" target="_blank" style="background: #059669; color: white; padding: 10px 18px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">Doctor Dashboard</a>
-        <a href="{public_url}/docs" target="_blank" style="background: #475569; color: white; padding: 10px 18px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">API Docs</a>
+<div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding: 24px; border-radius: 12px; border: 1px solid #38bdf8; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #f8fafc; max-width: 680px; margin: 12px 0;">
+    <h2 style="margin: 0 0 10px 0; color: #38bdf8; font-size: 22px; display: flex; align-items: center; gap: 8px;">
+        🏥 <span>MediKiosk v2 Backend is Online!</span>
+    </h2>
+    <p style="margin: 0 0 16px 0; font-size: 13px; color: #94a3b8; line-height: 1.5;">
+        All AI models (Qwen2.5 7B, Qwen2.5-VL 3B, Whisper, DenseNet-121) are fully loaded in GPU memory.
+    </p>
+
+    <!-- Local laptop setup callout -->
+    <div style="background: rgba(30, 41, 59, 0.85); border: 1px solid #0284c7; border-radius: 8px; padding: 14px 16px; margin-bottom: 18px;">
+        <div style="font-size: 12px; font-weight: 700; color: #38bdf8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;">
+            💻 Connect Your Local Laptop (npm run dev)
+        </div>
+        <div style="font-size: 12px; color: #cbd5e1; margin-bottom: 8px;">
+            Copy &amp; paste this line into your laptop's <code>frontend/.env</code> file:
+        </div>
+        <div style="background: #020617; border: 1px solid #334155; border-radius: 6px; padding: 10px 14px; font-family: monospace; font-size: 13px; color: #4ade80; user-select: all; word-break: break-all;">
+            VITE_API_BASE_URL={public_url}
+        </div>
+        <div style="font-size: 11px; color: #94a3b8; margin-top: 8px;">
+            Then in your terminal run: <code style="color: #f1f5f9; background: #334155; padding: 2px 6px; border-radius: 4px;">npm run dev</code> and open <code style="color: #60a5fa;">http://localhost:5173</code>
+        </div>
+    </div>
+
+    <!-- Direct Cloud Links -->
+    <div style="font-size: 12px; font-weight: 600; color: #94a3b8; margin-bottom: 8px;">
+        Or access directly via Cloudflare tunnel:
+    </div>
+    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+        <a href="{public_url}" target="_blank" style="background: #0284c7; color: white; padding: 9px 16px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 13px; display: inline-block;">Open Web Kiosk ↗</a>
+        <a href="{public_url}/doctor" target="_blank" style="background: #059669; color: white; padding: 9px 16px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 13px; display: inline-block;">Doctor Dashboard ↗</a>
+        <a href="{public_url}/docs" target="_blank" style="background: #475569; color: white; padding: 9px 16px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 13px; display: inline-block;">API Docs ↗</a>
     </div>
 </div>
 \"\"\"))
+
 """)
 
     # Stage 16 (Helper cells)

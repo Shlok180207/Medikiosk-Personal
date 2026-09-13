@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import SmartCameraScanner from '../components/SmartCameraScanner';
 
-const API_BASE_URL = (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') ? '/api' : 'http://localhost:8000/api';
+import { API_BASE_URL } from '../utils/api';
 
 export default function DocumentScan() {
   const navigate = useNavigate();
