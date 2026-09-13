@@ -47,16 +47,83 @@ def extract_text_from_pdf(pdf_input: Union[str, bytes]) -> str:
 COMMON_LAB_RANGES = {
     "hemoglobin": {"name": "Hemoglobin (Hb)", "unit": "g/dL", "min": 12.0, "max": 17.5},
     "hb": {"name": "Hemoglobin (Hb)", "unit": "g/dL", "min": 12.0, "max": 17.5},
-    "tlc": {"name": "Total Leukocyte Count (TLC/WBC)", "unit": "/cumm", "min": 4000, "max": 11000},
-    "wbc": {"name": "Total Leukocyte Count (TLC/WBC)", "unit": "/cumm", "min": 4000, "max": 11000},
-    "platelet": {"name": "Platelet Count", "unit": "/cumm", "min": 150000, "max": 450000},
+    "hgb": {"name": "Hemoglobin (Hb)", "unit": "g/dL", "min": 12.0, "max": 17.5},
+    "tlc": {"name": "Total Leukocyte Count (TLC/WBC)", "unit": "10^9/L", "min": 4.0, "max": 11.0},
+    "wbc": {"name": "Total Leukocyte Count (TLC/WBC)", "unit": "10^9/L", "min": 4.0, "max": 11.0},
+    "platelet": {"name": "Platelet Count", "unit": "10^9/L", "min": 150.0, "max": 450.0},
+    "plt": {"name": "Platelet Count", "unit": "10^9/L", "min": 150.0, "max": 450.0},
+    "rbc": {"name": "Red Blood Cell Count (RBC)", "unit": "10^12/L", "min": 4.2, "max": 5.8},
+    "hct": {"name": "Hematocrit / PCV", "unit": "%", "min": 36.0, "max": 50.0},
+    "mcv": {"name": "Mean Corpuscular Volume (MCV)", "unit": "fL", "min": 80.0, "max": 100.0},
+    "mch": {"name": "Mean Corpuscular Hemoglobin (MCH)", "unit": "pg", "min": 27.0, "max": 34.0},
+    "mchc": {"name": "Mean Corpuscular Hb Conc (MCHC)", "unit": "g/dL", "min": 31.5, "max": 36.0},
+    "rdw": {"name": "Red Cell Distribution Width (RDW)", "unit": "%", "min": 11.5, "max": 15.0},
+    "lym": {"name": "Lymphocytes (LYM)", "unit": "%", "min": 20.0, "max": 50.0},
+    "gran": {"name": "Granulocytes / Neutrophils", "unit": "%", "min": 40.0, "max": 75.0},
     "creatinine": {"name": "Serum Creatinine", "unit": "mg/dL", "min": 0.6, "max": 1.2},
-    "urea": {"name": "Blood Urea", "unit": "mg/dL", "min": 15, "max": 45},
+    "urea": {"name": "Blood Urea", "unit": "mg/dL", "min": 15.0, "max": 45.0},
     "bilirubin": {"name": "Total Bilirubin", "unit": "mg/dL", "min": 0.2, "max": 1.2},
-    "glucose": {"name": "Blood Glucose (Fasting)", "unit": "mg/dL", "min": 70, "max": 100},
-    "sugar": {"name": "Blood Sugar (Random)", "unit": "mg/dL", "min": 70, "max": 140},
+    "glucose": {"name": "Blood Glucose (Fasting)", "unit": "mg/dL", "min": 70.0, "max": 100.0},
+    "sugar": {"name": "Blood Sugar (Random)", "unit": "mg/dL", "min": 70.0, "max": 140.0},
     "hba1c": {"name": "HbA1c", "unit": "%", "min": 4.0, "max": 5.7},
 }
+
+
+def clean_lab_numerical_reading(raw_str: str, min_v: float, max_v: float) -> Tuple[Optional[float], Optional[str]]:
+    """
+    Cleans and normalizes noisy OCR lab values (especially thermal dot-matrix printouts):
+    1. Detects appended 'l' (Low) or 'h' (High) clinical flags.
+    2. Recovers missing decimal points:
+       - '2971' for MCHC (Ref: 31.5-36.0): Trailing '1' is misread 'l' (Low) -> strips '1' -> '297' -> '29.7' (Low).
+       - '4221' for RBC (Ref: 4.2-5.8): Trailing '1' is misread 'l' (Low) -> strips '1' -> '422' -> '4.22' (Low).
+       - '1261' for HGB (Ref: 12.0-17.5): Trailing '1' is misread 'l' (Low) -> strips '1' -> '126' -> '12.6' (Low).
+       - '532' for RDW (Ref: 37-54): Missing decimal -> '53.2'.
+    """
+    if not raw_str:
+        return None, None
+
+    s = raw_str.strip()
+    explicit_flag = None
+    if re.search(r'[lL]$', s):
+        explicit_flag = "LOW"
+        s = re.sub(r'[lL]$', '', s).strip()
+    elif re.search(r'[hH]$', s):
+        explicit_flag = "HIGH"
+        s = re.sub(r'[hH]$', '', s).strip()
+
+    try:
+        val = float(s)
+    except ValueError:
+        m = re.search(r'[0-9]+(?:\.[0-9]+)?', s)
+        if m:
+            val = float(m.group(0))
+        else:
+            return None, None
+
+    # Decimal recovery
+    # Case 1: Trailing '1' was misread 'l' (Low flag)
+    if val > max_v * 2.5 and str(int(val)).endswith('1'):
+        candidate = str(int(val))[:-1]
+        for div in [10.0, 100.0, 1.0]:
+            try:
+                c_val = float(candidate) / div
+                if 0.35 * min_v <= c_val <= 2.5 * max_v:
+                    val = c_val
+                    if not explicit_flag and val < min_v:
+                        explicit_flag = "LOW"
+                    break
+            except Exception:
+                pass
+
+    # Case 2: Missing decimal point in dot-matrix printout
+    if val > max_v * 2.5:
+        for div in [10.0, 100.0, 1000.0]:
+            c_val = val / div
+            if 0.35 * min_v <= c_val <= 2.5 * max_v:
+                val = c_val
+                break
+
+    return round(val, 2), explicit_flag
 
 
 def run_cpu_ocr(image_path: str) -> str:
@@ -138,36 +205,49 @@ def parse_printed_report(image_path: str, raw_text: str = "") -> Dict[str, Any]:
     diagnoses = []
 
     for key, ref in COMMON_LAB_RANGES.items():
-        # Match pattern like "Hemoglobin: 9.5 g/dL" or "Hb 8.2" or "Platelet Count 95,000"
-        pattern = rf"(?:{key})\s*[:\-]?\s*([0-9]+(?:\.[0-9]+)?)"
+        # Match pattern like "MCHC: 2971", "MCHC 29.7l", "HGB 1261", "Hemoglobin: 9.5"
+        pattern = rf"\b(?:{key})\b\s*[:\-=]?\s*([0-9]+(?:\.[0-9]+)?[a-zA-Z]?)"
         match = re.search(pattern, raw_text, re.IGNORECASE)
         if match:
             try:
-                val = float(match.group(1))
-                name = ref["name"]
-                unit = ref["unit"]
-                min_v, max_v = ref["min"], ref["max"]
+                raw_token = match.group(1)
+                val, explicit_flag = clean_lab_numerical_reading(raw_token, ref["min"], ref["max"])
+                if val is not None:
+                    name = ref["name"]
+                    unit = ref["unit"]
+                    min_v, max_v = ref["min"], ref["max"]
 
-                if val < min_v:
-                    flag_msg = f"Low {name}: {val} {unit} (Ref: {min_v}-{max_v})"
-                    flagged_lab_values.append(flag_msg)
-                    if "Hemoglobin" in name:
-                        diagnoses.append("Anemia (Low Hemoglobin)")
-                    elif "Platelet" in name:
-                        diagnoses.append("Thrombocytopenia (Low Platelets)")
-                    elif "Leukocyte" in name or "WBC" in name:
-                        diagnoses.append("Leukopenia")
-                elif val > max_v:
-                    flag_msg = f"Elevated {name}: {val} {unit} (Ref: {min_v}-{max_v})"
-                    flagged_lab_values.append(flag_msg)
-                    if "Leukocyte" in name or "WBC" in name:
-                        diagnoses.append("Leukocytosis (Suspected Active Infection / Inflammation)")
-                    elif "Creatinine" in name:
-                        diagnoses.append("Elevated Serum Creatinine (Renal Impairment)")
-                    elif "Glucose" in name or "Sugar" in name:
-                        diagnoses.append("Hyperglycemia")
-                    elif "Bilirubin" in name:
-                        diagnoses.append("Hyperbilirubinemia (Jaundice)")
+                    is_low = (explicit_flag == "LOW") or (val < min_v)
+                    is_high = (explicit_flag == "HIGH") or (val > max_v)
+
+                    if is_low:
+                        flag_msg = f"Low {name}: {val} {unit} (Ref: {min_v}-{max_v})"
+                        flagged_lab_values.append(flag_msg)
+                        if "Hemoglobin" in name or key in ["hb", "hgb"]:
+                            diagnoses.append("Anemia (Low Hemoglobin)")
+                        elif "MCHC" in name:
+                            diagnoses.append("Hypochromia (Low MCHC)")
+                        elif "MCV" in name:
+                            diagnoses.append("Microcytosis (Low MCV)")
+                        elif "Platelet" in name or key in ["platelet", "plt"]:
+                            diagnoses.append("Thrombocytopenia (Low Platelets)")
+                        elif "Leukocyte" in name or key in ["wbc", "tlc"]:
+                            diagnoses.append("Leukopenia")
+                        elif "RBC" in name or key == "rbc":
+                            diagnoses.append("Low Erythrocyte Count (RBC)")
+                    elif is_high:
+                        flag_msg = f"Elevated {name}: {val} {unit} (Ref: {min_v}-{max_v})"
+                        flagged_lab_values.append(flag_msg)
+                        if "MCV" in name:
+                            diagnoses.append("Macrocytosis (Elevated MCV)")
+                        elif "Leukocyte" in name or key in ["wbc", "tlc"]:
+                            diagnoses.append("Leukocytosis (Suspected Active Infection / Inflammation)")
+                        elif "Creatinine" in name:
+                            diagnoses.append("Elevated Serum Creatinine (Renal Impairment)")
+                        elif "Glucose" in name or "Sugar" in name:
+                            diagnoses.append("Hyperglycemia")
+                        elif "Bilirubin" in name:
+                            diagnoses.append("Hyperbilirubinemia (Jaundice)")
             except Exception:
                 pass
 

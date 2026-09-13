@@ -957,7 +957,7 @@ def analyze_prescription(image_input, file_url: str = "") -> Dict[str, Any]:
         "hba1c", "biological ref", "reference interval", "observed value", "test name", "labsmart"
     ]
     lab_matches = sum(1 for k in LAB_KEYWORDS if k in combined_doc_text)
-    if len(drugs) == 0 and lab_matches >= 2:
+    if (len(drugs) == 0 and lab_matches >= 2) or (lab_matches >= 3):
         try:
             from perception.lab import analyze_lab_report
             print(f"🔬 Reclassifying document from Prescription to Laboratory Report ({lab_matches} lab keywords detected)...")
