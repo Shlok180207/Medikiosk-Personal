@@ -497,24 +497,37 @@ print("=" * 60)
 
     # Stage 8
     md_cell("""---
-## Stage 8 — Pull & Test Selected LLM
-Pulls the configured model (`qwen2.5:7b` for GPU or `qwen2.5:1.5b` for CPU) and executes a warm-up prompt.
+## Stage 8 — Pull & Test Selected LLMs
+Pulls **two required models** from Ollama and runs a warm-up verification:
+- **Text LLM** (`qwen2.5:7b` for GPU / `qwen2.5:1.5b` for CPU) — clinical reasoning, drug normalization, symptom extraction.
+- **Vision LLM** (`qwen2.5vl:3b`, always) — **mandatory** for prescription handwriting OCR and lab report structured parsing (`perception/prescription.py` + `perception/lab/vlm_extractor.py`).
 """)
 
-    code_cell("""# ── Stage 8: Pull & Test Selected LLM ──
+    code_cell("""# ── Stage 8: Pull & Test Selected LLM + Vision Model ──
 import subprocess
 import ollama
 
 print("=" * 60)
-print(f"🧠 Stage 8 — Pulling & Testing LLM: {LLM_MODEL}")
+print(f"🧠 Stage 8 — Pulling & Testing Models")
 print("=" * 60)
 
-# Pull the model
-print(f"Executing: ollama pull {LLM_MODEL}...")
+# ── 8a: Pull the main text LLM ──────────────────────────────────
+print(f"\\n[8a] Pulling text LLM: {LLM_MODEL}...")
 subprocess.run(["ollama", "pull", LLM_MODEL], check=True)
+print(f"✅ {LLM_MODEL} downloaded.")
 
-# Run warm-up test prompt
-print(f"Running warm-up clinical prompt on {LLM_MODEL}...")
+# ── 8b: Pull qwen2.5vl:3b (MANDATORY vision model) ────────────────
+# Required by:
+#   - perception/prescription.py  → handwriting OCR & drug extraction
+#   - perception/lab/vlm_extractor.py → lab report structured parsing
+VISION_MODEL = "qwen2.5vl:3b"
+print(f"\\n[8b] Pulling vision model: {VISION_MODEL}...")
+print("     (Used by prescription handwriting OCR & lab report VLM pipeline)")
+subprocess.run(["ollama", "pull", VISION_MODEL], check=True)
+print(f"✅ {VISION_MODEL} downloaded.")
+
+# ── 8c: Warm-up test on text LLM ──────────────────────────────────
+print(f"\\n[8c] Running warm-up clinical prompt on {LLM_MODEL}...")
 warmup_prompt = "You are MediKiosk Clinical Assistant. Respond with exactly the word: 'READY'."
 
 response = ollama.chat(
@@ -523,12 +536,26 @@ response = ollama.chat(
 )
 
 reply = response.get("message", {}).get("content", "").strip()
-print(f"Model warm-up response: {reply}")
+print(f"Text LLM warm-up response: {reply}")
 
 if not reply:
     raise RuntimeError(f"❌ LLM {LLM_MODEL} returned an empty response during warm-up!")
 
-print(f"✅ {LLM_MODEL} warm-up successful!")
+# ── 8d: Verify vision model is loaded in Ollama registry ──────────
+print(f"\\n[8d] Verifying {VISION_MODEL} in Ollama registry...")
+model_list_out = subprocess.check_output(["ollama", "list"], text=True)
+if VISION_MODEL not in model_list_out:
+    raise RuntimeError(
+        f"❌ {VISION_MODEL} was not found in 'ollama list' after pull!\\n"
+        "Prescription OCR and Lab VLM pipelines will fail without this model."
+    )
+
+print(f"✅ {VISION_MODEL} confirmed in Ollama registry.")
+print("\\nOllama model registry:")
+print(model_list_out.strip())
+
+print("=" * 60)
+print(f"✅ All models ready: {LLM_MODEL} + {VISION_MODEL}")
 print("=" * 60)
 """)
 
