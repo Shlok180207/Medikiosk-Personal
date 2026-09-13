@@ -224,10 +224,11 @@ print("=" * 60)
     # Stage 4
     md_cell("""---
 ## Stage 4 — Install Python Dependencies
-Installs all backend, AI, vision, audio, and OCR dependencies.
+Installs all backend, AI, vision, audio, and OCR dependencies in 5 tiers.
 - **Safety check**: Colab's existing CUDA-enabled PyTorch environment is preserved and NOT replaced blindly.
 - Installs `PyMuPDF` (explicitly as `PyMuPDF`, avoiding any unrelated `fitz` package).
 - Installs `pytesseract`, `faster-whisper`, `torchxrayvision`, `rapidfuzz`, `ollama`, `fastapi`, `uvicorn`, etc.
+- Installs `bitsandbytes` (required by `perception/lab/vlm_extractor.py` → Transformers 4-bit NF4 quantization fallback for Qwen2.5-VL-3B).
 - Re-verifies that `torch.cuda.is_available()` is still intact after package installations.
 """)
 
@@ -288,10 +289,14 @@ package_tiers = [
         ]
     ),
     (
-        "Tier 5: Deep Learning Vision & LLM Client",
+        "Tier 5: Deep Learning Vision, LLM Client & Quantization",
         [
             "torchxrayvision>=1.2.3",
-            "ollama>=0.1.7"
+            "ollama>=0.1.7",
+            # bitsandbytes: Required by perception/lab/vlm_extractor.py
+            # for the Transformers fallback path → BitsAndBytesConfig 4-bit NF4
+            # quantization of Qwen2.5-VL-3B-Instruct (when Ollama is unavailable)
+            "bitsandbytes>=0.43.0"
         ]
     )
 ]
