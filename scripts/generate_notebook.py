@@ -65,10 +65,12 @@ print(f"Branch Target     : {BRANCH}")
 print(f"Processor Mode    : {PROCESSOR_MODE}")
 print(f"Server Port       : {PORT}")
 if sys.platform == "win32":
-    print("\n⚠️ NOTICE: You are viewing/running this notebook locally on Windows!")
+    print()
+    print("⚠️ NOTICE: You are viewing/running this notebook locally on Windows!")
     print("   'run_colab.ipynb' is designed to run in Google Colab (Linux) with a T4 GPU.")
     print("   Please upload this file to https://colab.research.google.com and run it there.")
 print("=" * 60)
+
 
 """)
 
