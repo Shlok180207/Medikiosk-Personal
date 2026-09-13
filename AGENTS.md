@@ -30,3 +30,8 @@ Refer to [PROJECT_MEMORY.md](file:///c:/Users/hp/OneDrive/Desktop/folders/sih/PR
    - Prefer surgical changes via `replace_file_content`.
    - When modifying frontend components, retain styling consistency (`frontend/src/index.css`).
    - Keep answers concise and direct to ensure fast streaming and avoid network timeouts.
+
+6. **Git Remote & Target Repository (STRICT)**:
+   - Primary remote: `origin` points to `https://github.com/Shlok180207/Medikiosk-Personal.git`.
+   - **NEVER commit or push to Medikiosk01**.
+   - **ALWAYS commit and push to Medikiosk-Personal**.
